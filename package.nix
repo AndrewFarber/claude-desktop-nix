@@ -308,6 +308,16 @@ stdenv.mkDerivation {
       EXTRA=${lib.escapeShellArg extraAppPath} replaceOnce "the PATH allowlist in $f" "$f" \
         '"/run/current-system/profile/bin"\]' '"\"/run/current-system/profile/bin\",$ENV{EXTRA}]"'
     done
+
+    # Absolute Debian paths that bypass PATH. The system SSH client (the app
+    # derives ssh-add from it by name, which the store path keeps working):
+    findOne "the system SSH client path" '{return"/usr/bin/ssh"}'
+    replaceOnce "the system SSH client path" "$target" \
+      '\{return"/usr/bin/ssh"\}' '"{return\"${lib.getBin openssh}/bin/ssh\"}"'
+    # secret-tool, which reads the browser key when importing cookies:
+    findOne "the secret-tool path" '="/usr/bin/secret-tool"'
+    replaceOnce "the secret-tool path" "$target" \
+      '="/usr/bin/secret-tool"' '"=\"${lib.getBin libsecret}/bin/secret-tool\""'
   ''
   + lib.optionalString withCowork ''
     mapfile -t targets < <(grep -rlF '"/usr/bin/qemu-system-' app/.vite/build)
