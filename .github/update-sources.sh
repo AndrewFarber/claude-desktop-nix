@@ -7,6 +7,8 @@
 # Needs: curl, gpg, gpgv, jq, sha256sum, dpkg-deb, tar, GNU date and grep.
 # Run from the repo root.
 set -euo pipefail
+# Keep errexit inside $(...) too; entry and cli_pin run in substitutions.
+shopt -s inherit_errexit
 
 base=https://downloads.claude.ai/claude-desktop/apt/stable
 package=claude-desktop
@@ -34,22 +36,28 @@ cli_pin() { # deb-url deb-sha256 cli-platform
   # The app ships a manifest naming the exact Claude Code build it runs. It
   # sits uncompressed in app.asar, inside the .deb we just verified.
   local deb=$work/app.deb manifest
-  curl -fsSL --proto '=https' "$1" -o "$deb"
-  echo "$2  $deb" | sha256sum --check --quiet
+  curl -fsSL --proto '=https' "$1" -o "$deb" || die "could not download $1"
+  echo "$2  $deb" | sha256sum --check --quiet || die "$1 does not match its signed sha256"
+  # Bundles may embed identical copies; distinct ones would be ambiguous.
   manifest=$(dpkg-deb --fsys-tarfile "$deb" |
     tar -xO --wildcards '*/resources/app.asar' |
-    grep -aoE "JSON\.parse\('\{\"version\":[^']*claude-code-releases[^']*'\)" |
-    sed "s/^JSON\.parse('//; s/')\$//")
+    { grep -aoE "JSON\.parse\('\{\"version\":[^']*claude-code-releases[^']*'\)" || true; } |
+    sed "s/^JSON\.parse('//; s/')\$//" | sort -u) || die "could not read app.asar from $1"
   rm -f "$deb"
-  [[ $(grep -c . <<<"$manifest") == 1 ]] || die "expected one Claude Code manifest in $1"
+  [[ $(grep -c . <<<"$manifest") == 1 ]] || die "expected one distinct Claude Code manifest in $1"
 
+  # The app downloads from <baseUrl>/<top-level version>, so use that and
+  # insist the inner manifest describes the same version.
   jq -ce --arg platform "$3" '
     .manifest.platforms[$platform] as $p
-    | select(.baseUrl | startswith("https://downloads.claude.ai/"))
-    | select($p.checksum | test("^[0-9a-f]{64}$"))
+    | select(.version | type == "string" and test("^[0-9]+(\\.[0-9]+)+$"))
+    | select(.manifest.version == .version)
+    | select(.baseUrl | type == "string" and startswith("https://downloads.claude.ai/"))
+    | select($p.binary | type == "string" and test("^[A-Za-z0-9._-]+$"))
+    | select($p.checksum | type == "string" and test("^[0-9a-f]{64}$"))
     | {
-        version: .manifest.version,
-        url: "\(.baseUrl)/\(.manifest.version)\(if .manifest.hostPolicy == true then "/desktop" else "" end)/\($platform)/\($p.binary)",
+        version: .version,
+        url: "\(.baseUrl)/\(.version)\(if .manifest.hostPolicy == true then "/desktop" else "" end)/\($platform)/\($p.binary)",
         sha256: $p.checksum
       }
   ' <<<"$manifest" || die "unexpected Claude Code manifest in $1"

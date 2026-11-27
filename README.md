@@ -76,9 +76,10 @@ per-user packages (`users.users.<name>.packages`, Home Manager with
 `useUserPackages`), so for example links and sign-in buttons can't open a
 browser installed there. The build appends `/etc/profiles/per-user/$USER/bin`
 and the store paths of the tools the app needs (bubblewrap, openssh, socat,
-xdg-utils). Both are root-owned and read-only, which is the app's own test.
-User-writable profiles such as `~/.nix-profile/bin` are deliberately not
-added.
+xdg-utils). Only root can change either. The app adds its base list to `PATH`
+without checking it (its root-owned check only filters `/usr/local`), so
+user-writable profiles such as `~/.nix-profile/bin` are deliberately not
+added: that would undo the hardening.
 
 ## Cowork VM
 

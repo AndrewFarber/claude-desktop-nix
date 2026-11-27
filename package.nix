@@ -56,8 +56,8 @@
   libxshmfence,
   libxtst,
 
-  # Cowork runs tasks in a local qemu VM. Disabling it drops qemu, OVMF and
-  # virtiofsd (~0.8 GB of the ~2.3 GB closure).
+  # Cowork runs tasks in a local qemu VM. Disabling it drops qemu, OVMF,
+  # virtiofsd and the VM's copy of the CLI (~1.2 GB of the ~3.2 GB closure).
   withCowork ? true,
 }:
 
@@ -100,12 +100,14 @@ let
     xdg-utils
   ];
 
-  # At startup the app replaces PATH with a fixed list of root-owned system
-  # dirs (hardening against PATH hijacking). On NixOS that drops per-user
+  # At startup the app replaces PATH with a fixed list of system dirs
+  # (hardening against PATH hijacking). On NixOS that drops per-user
   # packages (users.users.<name>.packages, Home Manager's useUserPackages),
   # so e.g. links can't open a browser installed there, and it drops the
-  # tools the wrapper adds. Both are root-owned and read-only, which is the
-  # app's own trust test, so append them.
+  # tools the wrapper adds. The app trusts that base list as is (its
+  # root-owned/read-only check only filters /usr/local), so only append
+  # dirs only root can change: store paths and /etc/profiles/per-user.
+  # Never add a user-writable dir such as ~/.nix-profile/bin here.
   extraAppPath = lib.concatStringsSep "," (
     [
       ''...(()=>{try{return["/etc/profiles/per-user/"+require("os").userInfo().username+"/bin"]}catch{return[]}})()''
