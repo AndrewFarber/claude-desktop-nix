@@ -1,5 +1,7 @@
 # claude-desktop-nix
 
+[![build](https://github.com/AndrewFarber/claude-desktop-nix/actions/workflows/build.yml/badge.svg)](https://github.com/AndrewFarber/claude-desktop-nix/actions/workflows/build.yml)
+
 Nix flake that packages Anthropic's official Claude Desktop Linux build
 (the `.deb` from `downloads.claude.ai`) for NixOS. The binary is fetched
 directly from Anthropic; this repo contains no redistributed binaries.
@@ -9,14 +11,14 @@ Supports `x86_64-linux` and `aarch64-linux`. The package is unfree.
 ## Try it
 
 ```sh
-nix run github:<you>/claude-desktop-nix
+nix run github:AndrewFarber/claude-desktop-nix
 ```
 
 ## Use in a NixOS / Home Manager flake
 
 ```nix
 inputs.claude-desktop = {
-  url = "github:<you>/claude-desktop-nix";
+  url = "github:AndrewFarber/claude-desktop-nix";
   inputs.nixpkgs.follows = "nixpkgs";
 };
 
@@ -59,8 +61,19 @@ To update locally instead: `just update && just build`.
 
 ## Development
 
-`nix develop` provides `just` and the lint tools. `just` lists the recipes:
-`lint`, `fmt`, `check`, `build`, `run`, `update`.
+```sh
+git clone https://github.com/AndrewFarber/claude-desktop-nix
+cd claude-desktop-nix
+direnv allow   # or: nix develop
+```
+
+The dev shell provides `just`, the lint tools, and `gpg`/`jq` for the update
+script. The repo ships an `.envrc` (`use flake`), so with
+[direnv](https://direnv.net) and nix-direnv the shell loads automatically on
+`cd`. Without direnv, enter it with `nix develop` or prefix commands with
+`nix develop -c` (e.g. `nix develop -c just update`).
+
+`just` lists the recipes: `lint`, `fmt`, `check`, `build`, `run`, `update`.
 
 The arm64 job uses GitHub's `ubuntu-24.04-arm` runner. If that isn't available
 for your repo, drop it from the matrix in `build.yml`.
