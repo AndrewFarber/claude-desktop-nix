@@ -50,6 +50,10 @@
   libxrandr,
   libxshmfence,
   libxtst,
+
+  # Cowork runs tasks in a local qemu VM. Disabling it drops qemu, OVMF and
+  # virtiofsd (~0.8 GB of the ~2.3 GB closure) and leaves app.asar unmodified.
+  withCowork ? true,
 }:
 
 let
@@ -87,7 +91,10 @@ stdenv.mkDerivation {
   pname = "claude-desktop";
   inherit (source) version;
 
-  src = fetchurl { inherit (source) url sha256; };
+  src = fetchurl {
+    inherit (source) url;
+    hash = "sha256:${source.sha256}";
+  };
 
   nativeBuildInputs = [
     dpkg
@@ -147,12 +154,14 @@ stdenv.mkDerivation {
     runHook postUnpack
   '';
 
-  # The fuses enable OnlyLoadAppFromAsar, so the archive must be repacked
-  # rather than replaced by a plain directory.
   buildPhase = ''
     runHook preBuild
 
     res=usr/lib/claude-desktop/resources
+  ''
+  # The fuses enable OnlyLoadAppFromAsar, so the archive must be repacked
+  # rather than replaced by a plain directory.
+  + lib.optionalString withCowork ''
     asar extract $res/app.asar app
 
     mapfile -t targets < <(grep -rlF '"/usr/bin/qemu-system-' app/.vite/build)
@@ -165,8 +174,9 @@ stdenv.mkDerivation {
     rm -r $res/app.asar $res/app.asar.unpacked
     # Same files Anthropic leaves unpacked: native modules and the MCP binary.
     asar pack app $res/app.asar --unpack '{*.node,github-mcp-server}'
-
-    # Only used on Ubuntu 22.04; elsewhere the patched path above is used.
+  ''
+  + ''
+    # Only used on Ubuntu 22.04; with Cowork the patched path above is used.
     rm $res/virtiofsd $res/virtiofsd.LICENSE-*
 
     runHook postBuild
@@ -182,6 +192,18 @@ stdenv.mkDerivation {
     # The setuid helper can't be setuid in the store; without it Chromium
     # falls back to the user-namespace sandbox, which NixOS allows.
     rm $out/lib/claude-desktop/chrome-sandbox
+
+    # What the .deb's postinst registers system-wide, minus the apt repo,
+    # AppArmor profile and GNOME search provider (see README).
+    res=$out/lib/claude-desktop/resources
+    # File associations for .mcpb / .dxt / .skill; the desktop entry already
+    # declares the MIME types.
+    install -Dm644 $res/linux-mime/com.anthropic.Claude.xml \
+      $out/share/mime/packages/com.anthropic.Claude.xml
+    # `ccd` terminal launcher, only shipped by some releases.
+    if [ -x $res/bin/ccd ]; then
+      ln -s ../lib/claude-desktop/resources/bin/ccd $out/bin/ccd
+    fi
 
     runHook postInstall
   '';
@@ -208,5 +230,12 @@ stdenv.mkDerivation {
     sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
     platforms = lib.attrNames sources;
     mainProgram = "claude-desktop";
+    maintainers = [
+      {
+        name = "Andrew Farber";
+        github = "AndrewFarber";
+        githubId = 6015216;
+      }
+    ];
   };
 }

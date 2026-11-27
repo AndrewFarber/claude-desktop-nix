@@ -1,0 +1,65 @@
+name: update-lock
+
+# Weekly nixpkgs bump, so the libraries the app links against (nss, gtk,
+# qemu, ...) pick up security fixes. Same build-then-commit flow as update.yml.
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency: update
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+      lock: ${{ steps.check.outputs.lock }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+
+      - name: Update flake inputs
+        id: check
+        run: |
+          nix flake update
+          if git diff --quiet flake.lock; then
+            echo "changed=false" >>"$GITHUB_OUTPUT"
+          else
+            {
+              echo "changed=true"
+              echo "lock=$(jq -c . flake.lock)"
+            } >>"$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      lock: ${{ needs.check.outputs.lock }}
+
+  commit:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Commit new flake.lock
+        env:
+          LOCK: ${{ needs.check.outputs.lock }}
+        run: |
+          jq . <<<"$LOCK" >flake.lock
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "flake.lock: update"
+          git push

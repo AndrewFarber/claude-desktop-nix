@@ -25,6 +25,11 @@
         default = self.packages.${pkgs.stdenv.hostPlatform.system}.claude-desktop;
       });
 
+      # `nix flake check` builds the package for the current system.
+      checks = nixpkgs.lib.genAttrs systems (system: {
+        inherit (self.packages.${system}) claude-desktop;
+      });
+
       overlays.default = final: _prev: {
         claude-desktop = final.callPackage ./package.nix { };
       };

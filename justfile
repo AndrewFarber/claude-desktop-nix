@@ -18,7 +18,7 @@ fmt:
 
 # Evaluate the flake for every supported system
 check:
-    nix flake check --all-systems
+    nix flake check --all-systems --no-build
 
 # Build the package for this machine (creates ./result)
 build:
