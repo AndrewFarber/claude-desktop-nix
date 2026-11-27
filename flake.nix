@@ -29,6 +29,24 @@
         claude-desktop = final.callPackage ./package.nix { };
       };
 
+      devShells = forAllSystems (pkgs: {
+        default = pkgs.mkShellNoCC {
+          packages = with pkgs; [
+            # lint
+            actionlint
+            deadnix
+            nixfmt
+            shellcheck
+            statix
+            # tasks
+            just
+            # .github/update-sources.sh
+            gnupg
+            jq
+          ];
+        };
+      });
+
       formatter = forAllSystems (pkgs: pkgs.nixfmt);
     };
 }

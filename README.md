@@ -55,11 +55,12 @@ The qemu dependency makes the closure large (~2.4 GB).
 2. If anything changed, both architectures are built (`build.yml`).
 3. Only if both builds pass, the new `sources.json` is committed to `main`.
 
-To update locally instead:
+To update locally instead: `just update && just build`.
 
-```sh
-nix shell nixpkgs#gnupg nixpkgs#jq -c .github/update-sources.sh && nix build
-```
+## Development
+
+`nix develop` provides `just` and the lint tools. `just` lists the recipes:
+`lint`, `fmt`, `check`, `build`, `run`, `update`.
 
 The arm64 job uses GitHub's `ubuntu-24.04-arm` runner. If that isn't available
 for your repo, drop it from the matrix in `build.yml`.
