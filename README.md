@@ -83,10 +83,14 @@ without checking it (its root-owned check only filters `/usr/local`), so
 user-writable profiles such as `~/.nix-profile/bin` are deliberately not
 added: that would undo the hardening.
 
-Two tools are called by absolute Debian path rather than through `PATH`: the
-system SSH client (`/usr/bin/ssh`, plus `ssh-add` next to it) and
-`/usr/bin/secret-tool`, which reads the browser key when importing cookies.
-The build points both at store copies. KDE Wallet's `kwallet-query` isn't
+Some tools are called by absolute Debian path rather than through `PATH`: the
+system SSH client (`/usr/bin/ssh`, plus `ssh-add` next to it),
+`/usr/bin/secret-tool`, which reads the browser key when importing cookies,
+and `/usr/bin/busctl`, which probes the xdg portals (Wayland global
+shortcuts, computer use), the tray host and KWallet. The app also reads its
+packaged desktop entry from `/usr/share/applications` to write a user copy
+with extra launcher actions, then runs `/usr/bin/update-desktop-database`.
+The build points all of these at store copies. KDE Wallet's `kwallet-query` isn't
 patched, so cookie import from browsers that keep their key in KWallet
 doesn't work.
 

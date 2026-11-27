@@ -20,6 +20,7 @@
   cairo,
   cups,
   dbus,
+  desktop-file-utils,
   expat,
   glib,
   gsettings-desktop-schemas,
@@ -318,6 +319,24 @@ stdenv.mkDerivation {
     findOne "the secret-tool path" '="/usr/bin/secret-tool"'
     replaceOnce "the secret-tool path" "$target" \
       '="/usr/bin/secret-tool"' '"=\"${lib.getBin libsecret}/bin/secret-tool\""'
+    # busctl, which probes the xdg portals (Wayland global shortcuts, computer
+    # use), the tray host and KWallet. Bundled in more than one file.
+    mapfile -t targets < <(grep -rlF '"/usr/bin/busctl"' app/.vite/build)
+    if [ "''${#targets[@]}" -eq 0 ]; then
+      echo "expected at least one file using /usr/bin/busctl, found none" >&2
+      exit 1
+    fi
+    for f in "''${targets[@]}"; do
+      replaceOnce "the busctl path in $f" "$f" \
+        '"/usr/bin/busctl"' '"\"${lib.getBin systemd}/bin/busctl\""'
+    done
+    # The app reads the packaged desktop entry to write a user copy with extra
+    # launcher actions, then refreshes the user MIME cache.
+    findOne "the packaged desktop entry path" '`/usr/share/applications/''${'
+    replaceOnce "the packaged desktop entry path" "$target" \
+      '`/usr/share/applications/\$\{' '"`$ENV{out}/share/applications/\''${"'
+    replaceOnce "the update-desktop-database path" "$target" \
+      '"/usr/bin/update-desktop-database"' '"\"${desktop-file-utils}/bin/update-desktop-database\""'
   ''
   + lib.optionalString withCowork ''
     mapfile -t targets < <(grep -rlF '"/usr/bin/qemu-system-' app/.vite/build)
