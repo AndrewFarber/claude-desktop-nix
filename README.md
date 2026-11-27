@@ -116,3 +116,11 @@ for your repo, drop it from the matrix in `build.yml`.
 - In-app auto-update doesn't apply; update via this flake.
 - If Anthropic rotates the signing key, replace `keys/claude-desktop.asc`
   after checking the new fingerprint.
+
+## License
+
+The packaging code in this repository (Nix expressions, scripts and
+workflows) is released under the [MIT License](LICENSE). It does not cover
+Claude Desktop itself, which is proprietary software owned by Anthropic and
+downloaded from Anthropic at build time under
+[Anthropic's terms](https://www.anthropic.com/legal).
