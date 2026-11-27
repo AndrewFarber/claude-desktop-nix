@@ -46,6 +46,7 @@
             # tasks
             just
             # .github/update-sources.sh
+            dpkg
             gnupg
             jq
           ];

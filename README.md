@@ -41,22 +41,32 @@ on Wayland instead of XWayland.
 
 ## Claude Code
 
-The app downloads its own Claude Code CLI into `~/.config/Claude/claude-code/`
-at runtime. That's a generic glibc binary whose ELF interpreter is
-`/lib64/ld-linux-*.so`, which NixOS doesn't provide (`Could not start
-dynamically linked executable`).
+Upstream, the app downloads its own Claude Code CLI into
+`~/.config/Claude/claude-code/` at runtime and keeps updating it. Here the CLI
+comes from the Nix store instead, so it's reproducible and pinned with the app:
 
-The build patches `app.asar` so that once a download passes its checksum
-(and before the file is moved into place), the app sets the binary's
-interpreter to the Nix glibc loader with `patchelf`. Binaries downloaded
-before this fix get patched the next time the app checks them. The app still
-picks, downloads and updates the CLI version itself, and the CLI runs
-directly on the host, so `sudo`, `/etc` and your environment behave normally.
-Only the local CLI is changed: the copies the app sends to SSH hosts and to
-the Cowork VM keep their original interpreter. The build fails loudly if a
-release moves the code these hooks attach to.
+- Each app release names the exact CLI build it runs (version and sha256) in a
+  manifest inside `app.asar`. `update-sources.sh` copies that pin from the
+  verified `.deb` into `sources.json`, and the build fetches that file and
+  fails if the pin no longer matches the app's manifest.
+- The host copy gets its ELF interpreter pointed at the Nix glibc loader. The
+  upstream binary expects `/lib64/ld-linux-*.so`, which NixOS doesn't provide.
+- The build sets the app's dormant local-override path to the store copy.
+  That turns off downloading, auto-updating, repairing and cleaning up the
+  CLI. The override reports the pinned version, so version-gated features
+  still see the real version. The CLI runs directly on the host, so `sudo`,
+  `/etc` and your environment behave normally.
+- With Cowork, the VM gets an unmodified store copy, since the Nix loader
+  doesn't exist inside it. The app copies it into
+  `~/.config/Claude/claude-code-vm/local/` when a VM starts.
 
-See [`claude-code-interpreter.js`](claude-code-interpreter.js).
+The CLI only changes when the app does: a newer CLI that Anthropic publishes
+between Desktop releases isn't picked up. The CLI copies sent to SSH hosts are
+still downloaded by the app, since they run on the remote machine.
+
+Older versions of this package (and plain upstream) left downloads in
+`~/.config/Claude/claude-code/`. Nothing uses them any more, and you can
+delete that directory.
 
 ## PATH
 
@@ -80,8 +90,8 @@ At runtime Cowork also needs read/write access to `/dev/kvm` and
 `/dev/vhost-vsock`. If they're not world-writable on your system, add your
 user to the `kvm` group.
 
-The qemu dependency makes the closure large (~2.3 GB, ~1.5 GB without
-Cowork). If you don't use Cowork, build without it:
+The qemu dependency and the second, unmodified CLI copy make the closure large
+(~3.2 GB, ~2.0 GB without Cowork). If you don't use Cowork, build without it:
 
 ```nix
 inputs.claude-desktop.packages.${pkgs.stdenv.hostPlatform.system}.default.override { withCowork = false; }
@@ -96,9 +106,11 @@ pkgs.claude-desktop.override { withCowork = false; }
 1. `.github/update-sources.sh` verifies the apt repo's `InRelease` against the
    pinned key in `keys/`, checks each `Packages` index against the signed
    `Release`, and writes the newest version and `.deb` hash to `sources.json`.
-   It refuses an expired `Release` (`Valid-Until`, which guards against a
-   replayed old index), a version older than the one already pinned, and
-   architectures that disagree on the version.
+   For a new `.deb` it also downloads it, checks its hash, and copies the
+   Claude Code CLI pin from the app's manifest. It refuses an expired
+   `Release` (`Valid-Until`, which guards against a replayed old index), a
+   version older than the one already pinned, and architectures that disagree
+   on the app or CLI version.
 2. If anything changed, both architectures are built (`build.yml`).
 3. Only if both builds pass, the new `sources.json` is committed to `main`.
 
@@ -120,8 +132,8 @@ cd claude-desktop-nix
 direnv allow   # or: nix develop
 ```
 
-The dev shell provides `just`, the lint tools, and `gpg`/`jq` for the update
-script. The repo ships an `.envrc` (`use flake`), so with
+The dev shell provides `just`, the lint tools, and `gpg`/`jq`/`dpkg` for the
+update script. The repo ships an `.envrc` (`use flake`), so with
 [direnv](https://direnv.net) and nix-direnv the shell loads automatically on
 `cd`. Without direnv, enter it with `nix develop` or prefix commands with
 `nix develop -c` (e.g. `nix develop -c just update`).
@@ -140,7 +152,8 @@ for your repo, drop it from the matrix in `build.yml`.
   hardcodes `/usr` paths). Nor are the `.deb`'s apt repo and AppArmor profile,
   which don't apply on NixOS. File associations for `.mcpb`, `.dxt` and
   `.skill` and the `ccd` launcher (when a release ships it) are installed.
-- In-app auto-update doesn't apply; update via this flake.
+- In-app auto-update doesn't apply, for the app or its Claude Code CLI; update
+  via this flake.
 - If Anthropic rotates the signing key, replace `keys/claude-desktop.asc`
   after checking the new fingerprint.
 

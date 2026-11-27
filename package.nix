@@ -4,13 +4,16 @@
   lib,
   stdenv,
   fetchurl,
+  runCommand,
   dpkg,
   asar,
   autoPatchelfHook,
+  jq,
   makeShellWrapper,
   patchelf,
   perl,
   wrapGAppsHook3,
+  zstd,
   alsa-lib,
   at-spi2-atk,
   bubblewrap,
@@ -109,6 +112,47 @@ let
     ]
     ++ map (p: ''"${lib.getBin p}/bin"'') runtimeTools
   );
+
+  # The Claude Code CLI build this app release pins in its own manifest
+  # (update-sources.sh copies it from the signed .deb into sources.json, and
+  # the build below checks they still agree). The app would otherwise
+  # download it into ~/.config/Claude at runtime and keep updating it.
+  cliPlatform =
+    {
+      x86_64-linux = "linux-x64";
+      aarch64-linux = "linux-arm64";
+    }
+    .${system};
+
+  # As shipped: a Bun single-file executable with the JS appended to the ELF,
+  # so no strip/patchelf fixup here. The Cowork VM runs this copy.
+  cliGeneric =
+    runCommand "claude-code-generic-${source.cli.version}"
+      {
+        src = fetchurl {
+          inherit (source.cli) url;
+          hash = "sha256:${source.cli.sha256}";
+        };
+        nativeBuildInputs = [ zstd ];
+      }
+      ''
+        mkdir -p $out/bin
+        zstd -dq $src -o $out/bin/claude
+        chmod 555 $out/bin/claude
+      '';
+
+  # The host copy, with its interpreter pointed at the Nix glibc loader.
+  cli =
+    runCommand "claude-code-${source.cli.version}"
+      {
+        nativeBuildInputs = [ patchelf ];
+        meta.mainProgram = "claude";
+      }
+      ''
+        install -Dm755 ${cliGeneric}/bin/claude $out/bin/claude
+        patchelf --set-interpreter ${stdenv.cc.bintools.dynamicLinker} $out/bin/claude
+        [ "$($out/bin/claude --version)" = "${source.cli.version} (Claude Code)" ]
+      '';
 in
 
 stdenv.mkDerivation {
@@ -124,6 +168,7 @@ stdenv.mkDerivation {
     dpkg
     asar
     autoPatchelfHook
+    jq
     makeShellWrapper
     perl
     wrapGAppsHook3
@@ -211,22 +256,37 @@ stdenv.mkDerivation {
       ' "$file"
     }
 
-    # Let the Claude Code CLI the app downloads run on NixOS; see
-    # claude-code-interpreter.js. Hooks go into the CLI download path (after
-    # the checksum is verified, before the binary is moved into place) and the
-    # check of an existing install (fixes binaries downloaded before this).
-    findOne "the Claude Code install steps" '.step="land"'
-    substitute ${./claude-code-interpreter.js} interp.js \
-      --subst-var-by loader ${stdenv.cc.bintools.dynamicLinker} \
-      --subst-var-by patchelf ${lib.getExe patchelf}
-    HELPER=$(< interp.js) replaceOnce "the bundle prologue" "$target" \
-      '\A"use strict";' '"\"use strict\";$ENV{HELPER}\n"'
-    replaceOnce "the Claude Code install step" "$target" \
-      ',([\w$]+)\.step="land",await ([\w$]+)\(([\w$]+),([\w$]+)\)' \
-      '",globalThis.__nixClaudeCodeInterpreter($3,$4),$1.step=\"land\",await $2($3,$4)"'
-    replaceOnce "the Claude Code install check" "$target" \
-      '([\w$]+)=this\.getBinaryPathForTarget\(([^()]*)\),await ([\w$]+)\.default\.access\(\1,([\w$]+)\.constants\.X_OK\);' \
-      '"$1=this.getBinaryPathForTarget($2),await $3.default.access($1,$4.constants.X_OK);globalThis.__nixClaudeCodeInterpreter($1,$1);"'
+    # Claude Code CLI: use the store copy instead of the app's download.
+    findOne "the Claude Code manager" 'LOCAL OVERRIDE: Copied local binary for VM use'
+
+    # sources.json must pin the same CLI as this app release's manifest.
+    perl -ne 'print "$1\n" while /JSON\.parse\(\x27(\{"version":[^\x27]*?claude-code-releases[^\x27]*)\x27\)/g' \
+      "$target" >cli-pin.json
+    [ "$(wc -l <cli-pin.json)" -eq 1 ] || { echo "expected one Claude Code pin manifest" >&2; exit 1; }
+    pinned=$(jq -r '"\(.version) \(.manifest.platforms."${cliPlatform}".checksum)"' cli-pin.json)
+    if [ "$pinned" != ${lib.escapeShellArg "${source.cli.version} ${source.cli.sha256}"} ]; then
+      echo "sources.json pins Claude Code ${source.cli.version} (${source.cli.sha256})," >&2
+      echo "but this app release pins $pinned; run .github/update-sources.sh" >&2
+      exit 1
+    fi
+
+    # The manager has a local-override path (dormant in release builds) that
+    # turns off downloading, auto-updating, repairing and cleaning up the CLI.
+    replaceOnce "the Claude Code local override" "$target" \
+      'this\.localBinaryPath=null,' '"this.localBinaryPath=\"${cli}/bin/claude\","'
+    # Report the pinned version instead of none, so version-gated features
+    # see the real CLI version.
+    replaceOnce "the Claude Code override version" "$target" \
+      'resolution:"local_override",version:null,' '"resolution:\"local_override\",version:this.buildPinVersion,"'
+  ''
+  + lib.optionalString withCowork ''
+    # With an override the app copies that binary into the Cowork VM; give the
+    # VM the unpatched one, since the Nix loader doesn't exist there.
+    replaceOnce "the Cowork VM copy of Claude Code" "$target" \
+      'copyFile\(([\w$]+),([\w$]+)\)(,await [\w$]+\.default\.chmod\(\2,493\),await [\w$]+\([\w$]+,""\),[\w$]+\.info\("\[CCD\] LOCAL OVERRIDE: Copied local binary for VM use"\))' \
+      '"copyFile(\"${cliGeneric}/bin/claude\",$2)$3"'
+  ''
+  + ''
 
     # Extend the app's PATH allowlist (see extraAppPath). The app keeps a copy
     # in its early bootstrap and one in the main bundle and compares the

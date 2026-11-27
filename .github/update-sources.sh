@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Rewrite sources.json from Anthropic's signed apt repo.
-# Trust chain: pinned key -> InRelease signature -> Packages sha256 -> .deb sha256.
+# Trust chain: pinned key -> InRelease signature -> Packages sha256 -> .deb sha256
+# -> the Claude Code CLI pin (version + sha256) in the .deb's own manifest.
 # Also refuses expired metadata (replayed InRelease), version downgrades, and
 # architectures that disagree on the version.
-# Needs: curl, gpg, gpgv, jq, sha256sum, GNU date. Run from the repo root.
+# Needs: curl, gpg, gpgv, jq, sha256sum, dpkg-deb, tar, GNU date and grep.
+# Run from the repo root.
 set -euo pipefail
 
 base=https://downloads.claude.ai/claude-desktop/apt/stable
@@ -28,8 +30,33 @@ valid_until=$(sed -n 's/^Valid-Until: //p' "$work/Release")
 [[ -n "$valid_until" ]] || die "Release has no Valid-Until field"
 (($(date -d "$valid_until" +%s) > $(date +%s))) || die "Release expired at $valid_until"
 
-entry() { # nix-system deb-arch
-  local index=main/binary-$2/Packages expected latest version filename sha256 current newest
+cli_pin() { # deb-url deb-sha256 cli-platform
+  # The app ships a manifest naming the exact Claude Code build it runs. It
+  # sits uncompressed in app.asar, inside the .deb we just verified.
+  local deb=$work/app.deb manifest
+  curl -fsSL --proto '=https' "$1" -o "$deb"
+  echo "$2  $deb" | sha256sum --check --quiet
+  manifest=$(dpkg-deb --fsys-tarfile "$deb" |
+    tar -xO --wildcards '*/resources/app.asar' |
+    grep -aoE "JSON\.parse\('\{\"version\":[^']*claude-code-releases[^']*'\)" |
+    sed "s/^JSON\.parse('//; s/')\$//")
+  rm -f "$deb"
+  [[ $(grep -c . <<<"$manifest") == 1 ]] || die "expected one Claude Code manifest in $1"
+
+  jq -ce --arg platform "$3" '
+    .manifest.platforms[$platform] as $p
+    | select(.baseUrl | startswith("https://downloads.claude.ai/"))
+    | select($p.checksum | test("^[0-9a-f]{64}$"))
+    | {
+        version: .manifest.version,
+        url: "\(.baseUrl)/\(.manifest.version)\(if .manifest.hostPolicy == true then "/desktop" else "" end)/\($platform)/\($p.binary)",
+        sha256: $p.checksum
+      }
+  ' <<<"$manifest" || die "unexpected Claude Code manifest in $1"
+}
+
+entry() { # nix-system deb-arch cli-platform
+  local index=main/binary-$2/Packages expected latest version filename sha256 current newest cli
   expected=$(awk -v f="$index" '/^SHA256:/ { s = 1; next } /^[^ ]/ { s = 0 } s && $3 == f { print $1 }' "$work/Release")
   [[ -n "$expected" ]] || die "no $index in Release"
 
@@ -59,18 +86,25 @@ entry() { # nix-system deb-arch
     [[ "$newest" == "$version" ]] || die "refusing downgrade on $1: $current -> $version"
   fi
 
+  # Same .deb as already pinned: keep its CLI pin rather than re-downloading.
+  cli=$(jq -c --arg sys "$1" --arg sha256 "$sha256" \
+    'if .[$sys].sha256 == $sha256 then .[$sys].cli // empty else empty end' sources.json 2>/dev/null || true)
+  [[ -n "$cli" ]] || cli=$(cli_pin "$base/$filename" "$sha256" "$3")
+
   jq -n --arg sys "$1" --arg version "$version" --arg url "$base/$filename" --arg sha256 "$sha256" \
-    '{($sys): {$version, $url, $sha256}}'
+    --argjson cli "$cli" '{($sys): {$version, $url, $sha256, $cli}}'
 }
 
 # Build into the work dir: entry() reads the current sources.json, and a
 # failure must leave it untouched.
 {
-  entry x86_64-linux amd64
-  entry aarch64-linux arm64
+  entry x86_64-linux amd64 linux-x64
+  entry aarch64-linux arm64 linux-arm64
 } | jq -s 'add' >"$work/sources.json"
 
 [[ $(jq '[.[].version] | unique | length' "$work/sources.json") == 1 ]] ||
   die "architectures disagree on the version: $(jq -c 'map_values(.version)' "$work/sources.json")"
+[[ $(jq '[.[].cli.version] | unique | length' "$work/sources.json") == 1 ]] ||
+  die "architectures disagree on the Claude Code version: $(jq -c 'map_values(.cli.version)' "$work/sources.json")"
 
 mv "$work/sources.json" sources.json
