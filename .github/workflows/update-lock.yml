@@ -57,8 +57,20 @@ jobs:
       - name: Commit new flake.lock
         env:
           LOCK: ${{ needs.check.outputs.lock }}
+        # main may have moved while the candidate was built: never commit an
+        # older nixpkgs over a newer one, and don't fail if it's already there.
         run: |
+          current=$(jq '.nodes.nixpkgs.locked.lastModified' flake.lock)
+          candidate=$(jq '.nodes.nixpkgs.locked.lastModified' <<<"$LOCK")
+          if [ "$candidate" -lt "$current" ]; then
+            echo "main already locks a newer nixpkgs; skipping"
+            exit 0
+          fi
           jq . <<<"$LOCK" >flake.lock
+          if git diff --quiet flake.lock; then
+            echo "main already has this flake.lock; nothing to commit"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "flake.lock: update"

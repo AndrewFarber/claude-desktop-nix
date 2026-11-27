@@ -3,7 +3,7 @@
 # Trust chain: pinned key -> InRelease signature -> Packages sha256 -> .deb sha256
 # -> the Claude Code CLI pin (version + sha256) in the .deb's own manifest.
 # Also refuses expired metadata (replayed InRelease), version downgrades, and
-# architectures that disagree on the version.
+# architectures that disagree on the app or Claude Code version.
 # Needs: curl, gpg, gpgv, jq, sha256sum, dpkg-deb, tar, GNU date and grep.
 # Run from the repo root.
 set -euo pipefail
@@ -20,6 +20,13 @@ mkdir -m 700 "$GNUPGHOME"
 die() {
   echo "update-sources: $*" >&2
   exit 1
+}
+
+# Query the current sources.json. A missing file means a fresh start; an
+# unreadable one is an error, so it can't silently skip the downgrade check.
+pinned() {
+  [[ -e sources.json ]] || return 0
+  jq "$@" sources.json || die "cannot read sources.json"
 }
 
 gpg --quiet --dearmor --output "$work/key.gpg" keys/claude-desktop.asc
@@ -63,6 +70,8 @@ cli_pin() { # deb-url deb-sha256 cli-platform
   ' <<<"$manifest" || die "unexpected Claude Code manifest in $1"
 }
 
+# SC2016: the single-quoted $vars are jq variables, passed through pinned().
+# shellcheck disable=SC2016
 entry() { # nix-system deb-arch cli-platform
   local index=main/binary-$2/Packages expected latest version filename sha256 current newest cli
   expected=$(awk -v f="$index" '/^SHA256:/ { s = 1; next } /^[^ ]/ { s = 0 } s && $3 == f { print $1 }' "$work/Release")
@@ -88,15 +97,15 @@ entry() { # nix-system deb-arch cli-platform
   [[ -n "$latest" ]] || die "no $package in $index"
   read -r version filename sha256 <<<"$latest"
 
-  current=$(jq -r --arg sys "$1" '.[$sys].version // empty' sources.json 2>/dev/null || true)
+  current=$(pinned -r --arg sys "$1" '.[$sys].version // empty')
   if [[ -n "$current" ]]; then
     newest=$(printf '%s\n%s\n' "$current" "$version" | sort -V | tail -1)
     [[ "$newest" == "$version" ]] || die "refusing downgrade on $1: $current -> $version"
   fi
 
   # Same .deb as already pinned: keep its CLI pin rather than re-downloading.
-  cli=$(jq -c --arg sys "$1" --arg sha256 "$sha256" \
-    'if .[$sys].sha256 == $sha256 then .[$sys].cli // empty else empty end' sources.json 2>/dev/null || true)
+  cli=$(pinned -c --arg sys "$1" --arg sha256 "$sha256" \
+    'if .[$sys].sha256 == $sha256 then .[$sys].cli // empty else empty end')
   [[ -n "$cli" ]] || cli=$(cli_pin "$base/$filename" "$sha256" "$3")
 
   jq -n --arg sys "$1" --arg version "$version" --arg url "$base/$filename" --arg sha256 "$sha256" \

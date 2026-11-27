@@ -56,8 +56,20 @@ jobs:
         env:
           SOURCES: ${{ needs.check.outputs.sources }}
           VERSION: ${{ needs.check.outputs.version }}
+        # main may have moved while the candidate was built: never commit an
+        # older version over a newer one, and don't fail if it's already there.
         run: |
+          current=$(jq -r '."x86_64-linux".version' sources.json)
+          newest=$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -1)
+          if [ "$newest" != "$VERSION" ]; then
+            echo "main already pins $current, newer than $VERSION; skipping"
+            exit 0
+          fi
           jq . <<<"$SOURCES" >sources.json
+          if git diff --quiet sources.json; then
+            echo "main already has these sources; nothing to commit"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "claude-desktop: $VERSION"
