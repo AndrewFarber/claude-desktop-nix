@@ -58,6 +58,18 @@ release moves the code these hooks attach to.
 
 See [`claude-code-interpreter.js`](claude-code-interpreter.js).
 
+## PATH
+
+At startup the app replaces `PATH` with a fixed list of root-owned system
+directories, as hardening against `PATH` hijacking. On NixOS that hides
+per-user packages (`users.users.<name>.packages`, Home Manager with
+`useUserPackages`), so for example links and sign-in buttons can't open a
+browser installed there. The build appends `/etc/profiles/per-user/$USER/bin`
+and the store paths of the tools the app needs (bubblewrap, openssh, socat,
+xdg-utils). Both are root-owned and read-only, which is the app's own test.
+User-writable profiles such as `~/.nix-profile/bin` are deliberately not
+added.
+
 ## Cowork VM
 
 The app hardcodes Debian paths for qemu, OVMF/AAVMF firmware and virtiofsd.

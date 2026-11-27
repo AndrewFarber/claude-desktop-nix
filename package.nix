@@ -87,6 +87,28 @@ let
       from: to: "--replace-fail ${lib.escapeShellArg "\"${from}\""} ${lib.escapeShellArg "\"${to}\""}"
     ) coworkPaths
   );
+
+  # Tools the app runs: bwrap for its sandbox, ssh/socat for SSH remotes,
+  # xdg-open for links.
+  runtimeTools = [
+    bubblewrap
+    openssh
+    socat
+    xdg-utils
+  ];
+
+  # At startup the app replaces PATH with a fixed list of root-owned system
+  # dirs (hardening against PATH hijacking). On NixOS that drops per-user
+  # packages (users.users.<name>.packages, Home Manager's useUserPackages),
+  # so e.g. links can't open a browser installed there, and it drops the
+  # tools the wrapper adds. Both are root-owned and read-only, which is the
+  # app's own trust test, so append them.
+  extraAppPath = lib.concatStringsSep "," (
+    [
+      ''...(()=>{try{return["/etc/profiles/per-user/"+require("os").userInfo().username+"/bin"]}catch{return[]}})()''
+    ]
+    ++ map (p: ''"${lib.getBin p}/bin"'') runtimeTools
+  );
 in
 
 stdenv.mkDerivation {
@@ -205,6 +227,19 @@ stdenv.mkDerivation {
     replaceOnce "the Claude Code install check" "$target" \
       '([\w$]+)=this\.getBinaryPathForTarget\(([^()]*)\),await ([\w$]+)\.default\.access\(\1,([\w$]+)\.constants\.X_OK\);' \
       '"$1=this.getBinaryPathForTarget($2),await $3.default.access($1,$4.constants.X_OK);globalThis.__nixClaudeCodeInterpreter($1,$1);"'
+
+    # Extend the app's PATH allowlist (see extraAppPath). The app keeps a copy
+    # in its early bootstrap and one in the main bundle and compares the
+    # resulting PATH between them, so every copy gets the same entries.
+    mapfile -t targets < <(grep -rlF '"/run/current-system/profile/bin"]' app/.vite/build)
+    if [ "''${#targets[@]}" -eq 0 ]; then
+      echo "expected at least one file defining the app's PATH allowlist, found none" >&2
+      exit 1
+    fi
+    for f in "''${targets[@]}"; do
+      EXTRA=${lib.escapeShellArg extraAppPath} replaceOnce "the PATH allowlist in $f" "$f" \
+        '"/run/current-system/profile/bin"\]' '"\"/run/current-system/profile/bin\",$ENV{EXTRA}]"'
+    done
   ''
   + lib.optionalString withCowork ''
     mapfile -t targets < <(grep -rlF '"/usr/bin/qemu-system-' app/.vite/build)
@@ -257,14 +292,7 @@ stdenv.mkDerivation {
   postFixup = ''
     makeShellWrapper $out/lib/claude-desktop/claude-desktop $out/bin/claude-desktop \
       "''${gappsWrapperArgs[@]}" \
-      --prefix PATH : ${
-        lib.makeBinPath [
-          bubblewrap
-          openssh
-          socat
-          xdg-utils
-        ]
-      } \
+      --prefix PATH : ${lib.makeBinPath runtimeTools} \
       --add-flags "\''${NIXOS_OZONE_WL:+\''${WAYLAND_DISPLAY:+--ozone-platform-hint=auto --enable-features=WaylandWindowDecorations --enable-wayland-ime=true}}"
   '';
 
