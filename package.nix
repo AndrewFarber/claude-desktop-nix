@@ -8,6 +8,8 @@
   asar,
   autoPatchelfHook,
   makeShellWrapper,
+  patchelf,
+  perl,
   wrapGAppsHook3,
   alsa-lib,
   at-spi2-atk,
@@ -52,7 +54,7 @@
   libxtst,
 
   # Cowork runs tasks in a local qemu VM. Disabling it drops qemu, OVMF and
-  # virtiofsd (~0.8 GB of the ~2.3 GB closure) and leaves app.asar unmodified.
+  # virtiofsd (~0.8 GB of the ~2.3 GB closure).
   withCowork ? true,
 }:
 
@@ -101,6 +103,7 @@ stdenv.mkDerivation {
     asar
     autoPatchelfHook
     makeShellWrapper
+    perl
     wrapGAppsHook3
   ];
 
@@ -158,24 +161,66 @@ stdenv.mkDerivation {
     runHook preBuild
 
     res=usr/lib/claude-desktop/resources
-  ''
-  # The fuses enable OnlyLoadAppFromAsar, so the archive must be repacked
-  # rather than replaced by a plain directory.
-  + lib.optionalString withCowork ''
     asar extract $res/app.asar app
 
+    # Exactly one bundled file matching a fixed string, or fail the build.
+    findOne() {
+      mapfile -t targets < <(grep -rlF "$2" app/.vite/build)
+      if [ "''${#targets[@]}" -ne 1 ]; then
+        echo "expected exactly one file defining $1, found: ''${targets[*]}" >&2
+        exit 1
+      fi
+      target=''${targets[0]}
+    }
+    # Apply a regex substitution that must match exactly once. REP is a Perl
+    # expression (evaluated per match), so it can use $1.. and $ENV{...}.
+    # The check is in END so it also fails when the file can't be opened,
+    # which `perl -i` otherwise only warns about.
+    replaceOnce() {
+      local file=$2
+      what=$1 PAT=$3 REP=$4 perl -0777 -i -pe '
+        $n += s/$ENV{PAT}/$ENV{REP}/gee;
+        END {
+          if (($n // 0) != 1) {
+            print STDERR "$ENV{what}: expected exactly one match, got " . ($n // 0) . "\n";
+            $? = 1;
+          }
+        }
+      ' "$file"
+    }
+
+    # Let the Claude Code CLI the app downloads run on NixOS; see
+    # claude-code-interpreter.js. Hooks go into the CLI download path (after
+    # the checksum is verified, before the binary is moved into place) and the
+    # check of an existing install (fixes binaries downloaded before this).
+    findOne "the Claude Code install steps" '.step="land"'
+    substitute ${./claude-code-interpreter.js} interp.js \
+      --subst-var-by loader ${stdenv.cc.bintools.dynamicLinker} \
+      --subst-var-by patchelf ${lib.getExe patchelf}
+    HELPER=$(< interp.js) replaceOnce "the bundle prologue" "$target" \
+      '\A"use strict";' '"\"use strict\";$ENV{HELPER}\n"'
+    replaceOnce "the Claude Code install step" "$target" \
+      ',([\w$]+)\.step="land",await ([\w$]+)\(([\w$]+),([\w$]+)\)' \
+      '",globalThis.__nixClaudeCodeInterpreter($3,$4),$1.step=\"land\",await $2($3,$4)"'
+    replaceOnce "the Claude Code install check" "$target" \
+      '([\w$]+)=this\.getBinaryPathForTarget\(([^()]*)\),await ([\w$]+)\.default\.access\(\1,([\w$]+)\.constants\.X_OK\);' \
+      '"$1=this.getBinaryPathForTarget($2),await $3.default.access($1,$4.constants.X_OK);globalThis.__nixClaudeCodeInterpreter($1,$1);"'
+  ''
+  + lib.optionalString withCowork ''
     mapfile -t targets < <(grep -rlF '"/usr/bin/qemu-system-' app/.vite/build)
     if [ "''${#targets[@]}" -ne 1 ]; then
       echo "expected exactly one file defining the Cowork VM paths, found: ''${targets[*]}" >&2
       exit 1
     fi
     substituteInPlace "''${targets[0]}" ${replaceArgs}
-
+  ''
+  # The fuses enable OnlyLoadAppFromAsar, so the archive must be repacked
+  # rather than replaced by a plain directory.
+  + ''
     rm -r $res/app.asar $res/app.asar.unpacked
     # Same files Anthropic leaves unpacked: native modules and the MCP binary.
     asar pack app $res/app.asar --unpack '{*.node,github-mcp-server}'
-  ''
-  + ''
+
     # Only used on Ubuntu 22.04; with Cowork the patched path above is used.
     rm $res/virtiofsd $res/virtiofsd.LICENSE-*
 

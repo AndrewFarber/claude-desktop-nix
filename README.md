@@ -39,19 +39,37 @@ The overlay requires `nixpkgs.config.allowUnfree = true`.
 Set `NIXOS_OZONE_WL=1` (e.g. `environment.sessionVariables`) to run natively
 on Wayland instead of XWayland.
 
+## Claude Code
+
+The app downloads its own Claude Code CLI into `~/.config/Claude/claude-code/`
+at runtime. That's a generic glibc binary whose ELF interpreter is
+`/lib64/ld-linux-*.so`, which NixOS doesn't provide (`Could not start
+dynamically linked executable`).
+
+The build patches `app.asar` so that once a download passes its checksum
+(and before the file is moved into place), the app sets the binary's
+interpreter to the Nix glibc loader with `patchelf`. Binaries downloaded
+before this fix get patched the next time the app checks them. The app still
+picks, downloads and updates the CLI version itself, and the CLI runs
+directly on the host, so `sudo`, `/etc` and your environment behave normally.
+Only the local CLI is changed: the copies the app sends to SSH hosts and to
+the Cowork VM keep their original interpreter. The build fails loudly if a
+release moves the code these hooks attach to.
+
+See [`claude-code-interpreter.js`](claude-code-interpreter.js).
+
 ## Cowork VM
 
 The app hardcodes Debian paths for qemu, OVMF/AAVMF firmware and virtiofsd.
-The build unpacks `app.asar`, rewrites those paths to Nix store paths, and
-repacks it. The build fails loudly if a new release moves them.
+The build rewrites those paths in `app.asar` to Nix store paths. The build
+fails loudly if a new release moves them.
 
 At runtime Cowork also needs read/write access to `/dev/kvm` and
 `/dev/vhost-vsock`. If they're not world-writable on your system, add your
 user to the `kvm` group.
 
 The qemu dependency makes the closure large (~2.3 GB, ~1.5 GB without
-Cowork). If you don't use Cowork, build without it; `app.asar` is then left
-exactly as shipped:
+Cowork). If you don't use Cowork, build without it:
 
 ```nix
 inputs.claude-desktop.packages.${pkgs.stdenv.hostPlatform.system}.default.override { withCowork = false; }
