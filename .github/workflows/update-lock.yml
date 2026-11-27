@@ -1,7 +1,7 @@
 name: update-lock
 
-# Weekly nixpkgs bump (tack pin), so the libraries the app links against (nss,
-# gtk, qemu, ...) pick up security fixes. Same build-then-commit flow as
+# Weekly nixpkgs bump (flake.lock), so the libraries the app links against
+# (nss, gtk, qemu, ...) pick up security fixes. Same build-then-commit flow as
 # update.yml.
 
 on:
@@ -28,19 +28,18 @@ jobs:
 
       - uses: cachix/install-nix-action@382a9ed9481c7c1f94f68b72ef105b3417c73877 # v32.1.0
 
-      - name: Update tack pins
+      # install-nix-action hands the read-only github.token to Nix, which
+      # spares `nix flake update` the unauthenticated GitHub API rate limit.
+      - name: Update flake.lock
         id: check
-        env:
-          # Read-only; spares tack the unauthenticated GitHub API rate limit.
-          GH_TOKEN: ${{ github.token }}
         run: |
-          nix develop -c tack update
-          if git diff --quiet .tack/pins.lock.json; then
+          nix flake update
+          if git diff --quiet flake.lock; then
             echo "changed=false" >>"$GITHUB_OUTPUT"
           else
             {
               echo "changed=true"
-              echo "lock=$(jq -c . .tack/pins.lock.json)"
+              echo "lock=$(jq -c . flake.lock)"
             } >>"$GITHUB_OUTPUT"
           fi
 
@@ -64,7 +63,7 @@ jobs:
         with:
           ref: main
 
-      - name: Commit new pins.lock.json
+      - name: Commit new flake.lock
         env:
           LOCK: ${{ needs.check.outputs.lock }}
         # The candidate was built against $GITHUB_SHA. If main has moved since
@@ -75,12 +74,12 @@ jobs:
             echo "main moved since $GITHUB_SHA was checked; skipping"
             exit 0
           fi
-          jq . <<<"$LOCK" >.tack/pins.lock.json
-          if git diff --quiet .tack/pins.lock.json; then
-            echo "main already has this pins.lock.json; nothing to commit"
+          jq . <<<"$LOCK" >flake.lock
+          if git diff --quiet flake.lock; then
+            echo "main already has this flake.lock; nothing to commit"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "tack: update nixpkgs"
+          git commit -am "flake.lock: update nixpkgs"
           git push

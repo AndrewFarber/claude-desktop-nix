@@ -31,12 +31,10 @@ nixpkgs.overlays = [ inputs.claude-desktop.overlays.default ];  # -> pkgs.claude
 
 The overlay requires `nixpkgs.config.allowUnfree = true`.
 
-This flake pins nixpkgs with [tack](https://github.com/manic-systems/tack)
-(`.tack/`), not as a flake input, so `inputs.nixpkgs.follows` has no effect.
-Nix only warns about it. `packages` is built against this repo's pinned
-nixpkgs. To build against your own nixpkgs, use the overlay. Downstream tack
-projects can override the pin through `tackOverrides`: the flake is
-recomposable.
+`packages` is built against this flake's locked nixpkgs (`nixos-unstable`).
+To share your own nixpkgs and avoid a second copy of its libraries, add
+`inputs.claude-desktop.inputs.nixpkgs.follows = "nixpkgs";` or use the
+overlay.
 
 ## Wayland
 
@@ -122,11 +120,11 @@ pkgs.claude-desktop.override { withCowork = false; }
    combination was never built, and the next run retries against the new
    `main`.
 
-`.github/workflows/update-lock.yml` does the same weekly with `tack update`
-for `.tack/pins.lock.json`, so the nixpkgs libraries the app links against
+`.github/workflows/update-lock.yml` does the same weekly with
+`nix flake update` for `flake.lock`, so the nixpkgs libraries the app links against
 get security fixes.
 
-To update locally instead: `just update` (app and CLI) or `just update-pins`
+To update locally instead: `just update` (app and CLI) or `just update-lock`
 (nixpkgs), then `just build`.
 
 The workflows run with read-only tokens. Only the final commit jobs get
@@ -142,17 +140,15 @@ cd claude-desktop-nix
 direnv allow   # or: nix develop
 ```
 
-The dev shell provides `just`, `tack`, the lint tools, and
-`curl`/`gpg`/`jq`/`dpkg` for the update script (CI runs it in the same shell). The repo ships an `.envrc` (`use flake`), so with
+The dev shell provides `just`, the lint tools, and `curl`/`gpg`/`jq`/`dpkg`
+for the update script (CI runs it in the same shell). The repo ships an
+`.envrc` (`use flake`), so with
 [direnv](https://direnv.net) and nix-direnv the shell loads automatically on
 `cd`. Without direnv, enter it with `nix develop` or prefix commands with
 `nix develop -c` (e.g. `nix develop -c just update`).
 
 `just` lists the recipes: `lint`, `fmt`, `check`, `build`, `run`, `update`,
-`update-pins`.
-
-`.tack/default.nix` is tack's generated resolver; refresh it with
-`tack init --resolver` rather than editing it.
+`update-lock`.
 
 The arm64 job uses GitHub's `ubuntu-24.04-arm` runner. If that isn't available
 for your repo, drop it from the matrix in `build.yml`.

@@ -36,7 +36,7 @@ update:
     .github/update-sources.sh
     git diff --stat sources.json
 
-# Bump the tack pins (nixpkgs)
-update-pins:
-    tack update
-    git diff --stat .tack/pins.lock.json
+# Bump nixpkgs in flake.lock
+update-lock:
+    nix flake update
+    git diff --stat flake.lock

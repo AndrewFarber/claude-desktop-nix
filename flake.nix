@@ -1,13 +1,13 @@
 {
   description = "Claude Desktop (official Linux build) packaged for Nix";
 
-  # nixpkgs is pinned with tack (.tack/pins.toml and .tack/pins.lock.json), not
-  # as a flake input. Downstream tack projects can override it through
-  # tackOverrides; everyone else can use the overlay with their own nixpkgs.
+  # Consumers can set `inputs.claude-desktop.inputs.nixpkgs.follows` to build
+  # `packages` against their own nixpkgs, or use the overlay.
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
   outputs =
-    { self, ... }@args:
+    { self, nixpkgs }:
     let
-      inherit ((import ./.tack) { overrides = args.tackOverrides or { }; }) nixpkgs;
       systems = builtins.attrNames (builtins.fromJSON (builtins.readFile ./sources.json));
       forAllSystems =
         f:
@@ -47,7 +47,6 @@
             statix
             # tasks
             just
-            tack
             # .github/update-sources.sh
             curl
             dpkg
