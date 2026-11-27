@@ -21,10 +21,7 @@ nix run github:AndrewFarber/claude-desktop-nix
 ## Use in a NixOS / Home Manager flake
 
 ```nix
-inputs.claude-desktop = {
-  url = "github:AndrewFarber/claude-desktop-nix";
-  inputs.nixpkgs.follows = "nixpkgs";
-};
+inputs.claude-desktop.url = "github:AndrewFarber/claude-desktop-nix";
 
 # then either
 home.packages = [ inputs.claude-desktop.packages.${pkgs.stdenv.hostPlatform.system}.default ];
@@ -33,6 +30,13 @@ nixpkgs.overlays = [ inputs.claude-desktop.overlays.default ];  # -> pkgs.claude
 ```
 
 The overlay requires `nixpkgs.config.allowUnfree = true`.
+
+This flake pins nixpkgs with [tack](https://github.com/manic-systems/tack)
+(`.tack/`), not as a flake input, so `inputs.nixpkgs.follows` has no effect.
+Nix only warns about it. `packages` is built against this repo's pinned
+nixpkgs. To build against your own nixpkgs, use the overlay. Downstream tack
+projects can override the pin through `tackOverrides`: the flake is
+recomposable.
 
 ## Wayland
 
@@ -113,12 +117,17 @@ pkgs.claude-desktop.override { withCowork = false; }
    version older than the one already pinned, and architectures that disagree
    on the app or CLI version.
 2. If anything changed, both architectures are built (`build.yml`).
-3. Only if both builds pass, the new `sources.json` is committed to `main`.
+3. Only if both builds pass, the new `sources.json` is committed to `main`. If
+   `main` moved while the candidate was building, the commit is skipped. That
+   combination was never built, and the next run retries against the new
+   `main`.
 
-`.github/workflows/update-lock.yml` does the same weekly for `flake.lock`, so
-the nixpkgs libraries the app links against get security fixes.
+`.github/workflows/update-lock.yml` does the same weekly with `tack update`
+for `.tack/pins.lock.json`, so the nixpkgs libraries the app links against
+get security fixes.
 
-To update locally instead: `just update && just build`.
+To update locally instead: `just update` (app and CLI) or `just update-pins`
+(nixpkgs), then `just build`.
 
 The workflows run with read-only tokens. Only the final commit jobs get
 `contents: write`, and every action is pinned to a commit SHA (Dependabot
@@ -133,13 +142,17 @@ cd claude-desktop-nix
 direnv allow   # or: nix develop
 ```
 
-The dev shell provides `just`, the lint tools, and `gpg`/`jq`/`dpkg` for the
-update script. The repo ships an `.envrc` (`use flake`), so with
+The dev shell provides `just`, `tack`, the lint tools, and
+`curl`/`gpg`/`jq`/`dpkg` for the update script (CI runs it in the same shell). The repo ships an `.envrc` (`use flake`), so with
 [direnv](https://direnv.net) and nix-direnv the shell loads automatically on
 `cd`. Without direnv, enter it with `nix develop` or prefix commands with
 `nix develop -c` (e.g. `nix develop -c just update`).
 
-`just` lists the recipes: `lint`, `fmt`, `check`, `build`, `run`, `update`.
+`just` lists the recipes: `lint`, `fmt`, `check`, `build`, `run`, `update`,
+`update-pins`.
+
+`.tack/default.nix` is tack's generated resolver; refresh it with
+`tack init --resolver` rather than editing it.
 
 The arm64 job uses GitHub's `ubuntu-24.04-arm` runner. If that isn't available
 for your repo, drop it from the matrix in `build.yml`.
@@ -156,7 +169,13 @@ for your repo, drop it from the matrix in `build.yml`.
 - In-app auto-update doesn't apply, for the app or its Claude Code CLI; update
   via this flake.
 - If Anthropic rotates the signing key, replace `keys/claude-desktop.asc`
-  after checking the new fingerprint.
+  after checking the new fingerprint. The pinned key is
+  `31DD DE24 DDFA B679 F42D  7BD2 BAA9 29FF 1A7E CACE`
+  (Anthropic Claude Code Release Signing, created 2026-03-30).
+- Upstream, an app release could pin a separate desktop build of the Claude
+  Code CLI (`desktopManifest`). Neither `update-sources.sh` nor the build
+  handles that yet, so both fail on such a release instead of pinning the
+  wrong CLI.
 
 ## License
 

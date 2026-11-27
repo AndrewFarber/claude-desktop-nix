@@ -52,6 +52,11 @@ cli_pin() { # deb-url deb-sha256 cli-platform
     sed "s/^JSON\.parse('//; s/')\$//" | sort -u) || die "could not read app.asar from $1"
   rm -f "$deb"
   [[ $(grep -c . <<<"$manifest") == 1 ]] || die "expected one distinct Claude Code manifest in $1"
+  # The app runs a separate desktopManifest build on the host when there is
+  # one, so pinning .manifest would pin the wrong CLI. package.nix refuses it
+  # too; supporting it needs both updated.
+  jq -e 'has("desktopManifest") | not' <<<"$manifest" >/dev/null ||
+    die "$1 pins a separate desktop Claude Code build (desktopManifest), which this script doesn't handle"
 
   # The app downloads from <baseUrl>/<top-level version>, so use that and
   # insist the inner manifest describes the same version.
@@ -78,7 +83,7 @@ entry() { # nix-system deb-arch cli-platform
   [[ -n "$expected" ]] || die "no $index in Release"
 
   curl -fsSL --proto '=https' "$base/dists/stable/$index" -o "$work/Packages-$2"
-  echo "$expected  $work/Packages-$2" | sha256sum --check --quiet
+  echo "$expected  $work/Packages-$2" | sha256sum --check --quiet || die "$index does not match its signed sha256"
 
   # Parse per stanza so fields never leak between entries, and keep only our
   # package in case the repo starts carrying others.

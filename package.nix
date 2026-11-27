@@ -262,9 +262,15 @@ stdenv.mkDerivation {
     findOne "the Claude Code manager" 'LOCAL OVERRIDE: Copied local binary for VM use'
 
     # sources.json must pin the same CLI as this app release's manifest.
+    # Same rules as update-sources.sh: identical copies are fine, distinct
+    # ones are ambiguous, and a separate desktopManifest build isn't handled.
     perl -ne 'print "$1\n" while /JSON\.parse\(\x27(\{"version":[^\x27]*?claude-code-releases[^\x27]*)\x27\)/g' \
-      "$target" >cli-pin.json
-    [ "$(wc -l <cli-pin.json)" -eq 1 ] || { echo "expected one Claude Code pin manifest" >&2; exit 1; }
+      "$target" | sort -u >cli-pin.json
+    [ "$(wc -l <cli-pin.json)" -eq 1 ] || { echo "expected one distinct Claude Code pin manifest" >&2; exit 1; }
+    jq -e '.manifest.version == .version' cli-pin.json >/dev/null ||
+      { echo "Claude Code pin manifest disagrees with its own version" >&2; exit 1; }
+    jq -e 'has("desktopManifest") | not' cli-pin.json >/dev/null ||
+      { echo "this app release pins a separate desktop Claude Code build (desktopManifest), which this package doesn't handle" >&2; exit 1; }
     pinned=$(jq -r '"\(.version) \(.manifest.platforms."${cliPlatform}".checksum)"' cli-pin.json)
     if [ "$pinned" != ${lib.escapeShellArg "${source.cli.version} ${source.cli.sha256}"} ]; then
       echo "sources.json pins Claude Code ${source.cli.version} (${source.cli.sha256})," >&2
@@ -330,6 +336,8 @@ stdenv.mkDerivation {
     mkdir -p $out/lib $out/bin
     cp -r usr/lib/claude-desktop $out/lib/
     cp -r usr/share $out/
+    # Debian packaging leftovers.
+    rm -r $out/share/lintian $out/share/doc
 
     # The setuid helper can't be setuid in the store; without it Chromium
     # falls back to the user-namespace sandbox, which NixOS allows.

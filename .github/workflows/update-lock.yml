@@ -1,7 +1,8 @@
 name: update-lock
 
-# Weekly nixpkgs bump, so the libraries the app links against (nss, gtk,
-# qemu, ...) pick up security fixes. Same build-then-commit flow as update.yml.
+# Weekly nixpkgs bump (tack pin), so the libraries the app links against (nss,
+# gtk, qemu, ...) pick up security fixes. Same build-then-commit flow as
+# update.yml.
 
 on:
   schedule:
@@ -11,6 +12,7 @@ on:
 permissions:
   contents: read
 
+# Shared with update.yml so the two never push to main at once.
 concurrency: update
 
 jobs:
@@ -26,16 +28,19 @@ jobs:
 
       - uses: cachix/install-nix-action@382a9ed9481c7c1f94f68b72ef105b3417c73877 # v32.1.0
 
-      - name: Update flake inputs
+      - name: Update tack pins
         id: check
+        env:
+          # Read-only; spares tack the unauthenticated GitHub API rate limit.
+          GH_TOKEN: ${{ github.token }}
         run: |
-          nix flake update
-          if git diff --quiet flake.lock; then
+          nix develop -c tack update
+          if git diff --quiet .tack/pins.lock.json; then
             echo "changed=false" >>"$GITHUB_OUTPUT"
           else
             {
               echo "changed=true"
-              echo "lock=$(jq -c . flake.lock)"
+              echo "lock=$(jq -c . .tack/pins.lock.json)"
             } >>"$GITHUB_OUTPUT"
           fi
 
@@ -48,30 +53,34 @@ jobs:
 
   commit:
     needs: [check, build]
+    # Only main's own runs: a dispatch from another branch builds a candidate
+    # against that branch, which must not land on main.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
 
-      - name: Commit new flake.lock
+      - name: Commit new pins.lock.json
         env:
           LOCK: ${{ needs.check.outputs.lock }}
-        # main may have moved while the candidate was built: never commit an
-        # older nixpkgs over a newer one, and don't fail if it's already there.
+        # The candidate was built against $GITHUB_SHA. If main has moved since
+        # (another update, or a push), that combination was never built, so
+        # skip; the next scheduled run rebuilds against the new main.
         run: |
-          current=$(jq '.nodes.nixpkgs.locked.lastModified' flake.lock)
-          candidate=$(jq '.nodes.nixpkgs.locked.lastModified' <<<"$LOCK")
-          if [ "$candidate" -lt "$current" ]; then
-            echo "main already locks a newer nixpkgs; skipping"
+          if [ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]; then
+            echo "main moved since $GITHUB_SHA was checked; skipping"
             exit 0
           fi
-          jq . <<<"$LOCK" >flake.lock
-          if git diff --quiet flake.lock; then
-            echo "main already has this flake.lock; nothing to commit"
+          jq . <<<"$LOCK" >.tack/pins.lock.json
+          if git diff --quiet .tack/pins.lock.json; then
+            echo "main already has this pins.lock.json; nothing to commit"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "flake.lock: update"
+          git commit -am "tack: update nixpkgs"
           git push

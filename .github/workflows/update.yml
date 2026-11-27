@@ -23,10 +23,13 @@ jobs:
         with:
           persist-credentials: false
 
+      # The dev shell provides the script's tools, the same as `just update`.
+      - uses: cachix/install-nix-action@382a9ed9481c7c1f94f68b72ef105b3417c73877 # v32.1.0
+
       - name: Read Anthropic's signed apt index
         id: check
         run: |
-          .github/update-sources.sh
+          nix develop -c .github/update-sources.sh
           if git diff --quiet sources.json; then
             echo "changed=false" >>"$GITHUB_OUTPUT"
           else
@@ -46,23 +49,27 @@ jobs:
 
   commit:
     needs: [check, build]
+    # Only main's own runs: a dispatch from another branch builds a candidate
+    # against that branch, which must not land on main.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
 
       - name: Commit new version
         env:
           SOURCES: ${{ needs.check.outputs.sources }}
           VERSION: ${{ needs.check.outputs.version }}
-        # main may have moved while the candidate was built: never commit an
-        # older version over a newer one, and don't fail if it's already there.
+        # The candidate was built against $GITHUB_SHA. If main has moved since
+        # (another update, or a push), that combination was never built, so
+        # skip; the next scheduled run rebuilds against the new main.
         run: |
-          current=$(jq -r '."x86_64-linux".version' sources.json)
-          newest=$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -1)
-          if [ "$newest" != "$VERSION" ]; then
-            echo "main already pins $current, newer than $VERSION; skipping"
+          if [ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]; then
+            echo "main moved since $GITHUB_SHA was checked; skipping"
             exit 0
           fi
           jq . <<<"$SOURCES" >sources.json

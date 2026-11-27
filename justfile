@@ -1,5 +1,8 @@
 # Tools come from the dev shell: `nix develop`, or prefix with `nix develop -c`.
 
+# Pass recipe arguments as "$@" so they keep their quoting.
+set positional-arguments
+
 # List available recipes
 default:
     @just --list
@@ -26,9 +29,14 @@ build:
 
 # Build and launch the app
 run *args:
-    nix run . -- {{ args }}
+    nix run . -- "$@"
 
 # Pull the newest version and hashes from Anthropic's signed apt repo
 update:
     .github/update-sources.sh
     git diff --stat sources.json
+
+# Bump the tack pins (nixpkgs)
+update-pins:
+    tack update
+    git diff --stat .tack/pins.lock.json

@@ -14,7 +14,7 @@ on:
         type: string
         default: ""
       lock:
-        description: Replacement flake.lock contents
+        description: Replacement .tack/pins.lock.json contents
         type: string
         default: ""
 
@@ -54,11 +54,11 @@ jobs:
           SOURCES: ${{ inputs.sources }}
         run: jq . <<<"$SOURCES" >sources.json
 
-      - name: Apply candidate flake.lock
+      - name: Apply candidate pins.lock.json
         if: inputs.lock != ''
         env:
           LOCK: ${{ inputs.lock }}
-        run: jq . <<<"$LOCK" >flake.lock
+        run: jq . <<<"$LOCK" >.tack/pins.lock.json
 
       - run: nix flake check --no-build
       - run: nix build -L .#packages.${{ matrix.system }}.default
