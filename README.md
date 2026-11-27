@@ -10,10 +10,7 @@ Supports `x86_64-linux` and `aarch64-linux`. The package is unfree.
 
 > [!NOTE]
 > This is an unofficial community packaging, not affiliated with or endorsed
-> by Anthropic. "Claude" and "Anthropic" are trademarks of Anthropic, PBC.
-> Claude Desktop is Anthropic's software, subject to
-> [Anthropic's terms](https://www.anthropic.com/legal). Report packaging
-> problems here, not to Anthropic support.
+> by Anthropic.
 
 ## Try it
 
